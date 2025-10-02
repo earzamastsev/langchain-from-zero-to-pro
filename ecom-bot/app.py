@@ -97,6 +97,7 @@ while True:
     logging.info(f"User: {user_input}")
     # Генерация ответа с обработкой ошибок
     try:
+        # Для получения всего ответа с метаданными используем метод invoke
         response = conversation.invoke(input=user_input)
         # Форматируем и выводим ответ
         bot_reply = response['response'].strip()
