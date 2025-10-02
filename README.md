@@ -1,2 +1,4 @@
-# langchain-from-zero-to-pro
-Learning exercises and practical tasks for Stepik course "Langchain: from zero to production"
+# Репозиторий с практическими заданиями в рамках курса
+
+
+1. ecom-bot - практическое задание 1.4 "Консольный ChatGPT-бот для e-commerce"
