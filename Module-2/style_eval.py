@@ -4,10 +4,13 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from brand_chain import ask, STYLE, BASE
+from src.brand_chain import ChatBot, STYLE
 
-load_dotenv(BASE / ".env", override=True)
-REPORTS = BASE / "reports"
+chatbot = ChatBot()
+ask = chatbot.chat
+
+load_dotenv(override=True)
+REPORTS = pathlib.Path("reports")
 REPORTS.mkdir(exist_ok=True)
 
 # Простые проверки до LLM
@@ -45,7 +48,7 @@ def llm_grade(text: str) -> Grade:
 def eval_batch(prompts: List[str]) -> dict:
     results = []
     for p in prompts:
-        reply = ask(p)
+        reply, tokens = ask(p)  # Распаковываем кортеж
         rule = rule_checks(reply.answer)
         g = llm_grade(reply.answer)
         final = int(0.4 * rule + 0.6 * g.score)
@@ -65,7 +68,7 @@ def eval_batch(prompts: List[str]) -> dict:
     return out
 
 if __name__ == "__main__":
-    eval_prompts = (BASE / "data/eval_prompts.txt").read_text(encoding="utf-8").strip().splitlines()
+    eval_prompts = pathlib.Path("data/eval_prompts.txt").read_text(encoding="utf-8").strip().splitlines()
     report = eval_batch(eval_prompts)
     print("Средний балл:", report["mean_final"])
     print("Отчёт:", REPORTS / "style_eval.json")

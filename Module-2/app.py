@@ -43,16 +43,7 @@ while True:
     if user_input == "":
         continue  # пустой ввод - пропускаем
     
-    # Проверка команды /order <id>
-    if user_input.startswith('/order '):
-        order_id = user_input[7:].strip()  # убираем '/order ' и пробелы
-        if order_id:
-            order_status = chatbot.get_order_status(order_id)
-            user_input = f"Пользователь интересуется статусом заказа {order_id}. Подготовь ответ на вопрос пользователя используя информацию по статусу заказа: {order_status}"
-        else:
-            print("Бот: Пожалуйста, укажите номер заказа после команды /order")
-            continue
-    
+   
     # Проверка команды выхода
     if user_input.lower() in ("выход", "quit", "exit"):
         print("Бот: До свидания!")
@@ -63,10 +54,10 @@ while True:
     # Генерация ответа с обработкой ошибок
     try:
         # Используем метод chat из класса ChatBot
-        bot_reply = chatbot.chat(user_input)
-        logging.info(f"Bot: {bot_reply}")
-        print(f"Бот: {bot_reply}")
-        chatbot.save_session(user_input, bot_reply)
+        bot_reply, total_tokens = chatbot.chat(user_input)
+        logging.info(f"Bot: {bot_reply.answer}")
+        print(f"Бот: {bot_reply.answer}")
+        chatbot.save_session(user_input, bot_reply, total_tokens)
     except Exception as e:
         # Логируем и выводим ошибку, продолжаем чат
         logging.error(f"Error: {e}")

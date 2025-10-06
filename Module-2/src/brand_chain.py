@@ -4,12 +4,14 @@ import json
 import uuid
 import logging
 from pathlib import Path
-from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
+from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 from langchain.memory import ConversationBufferMemory
-from langchain.chains import ConversationChain
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from src.schema import BotResponse
+from dotenv import load_dotenv
 
+load_dotenv(override=True)
 
 def load_style_guide() -> dict:
     """
@@ -79,7 +81,9 @@ def create_system_prompt_template(prompt_version: str = "current") -> SystemMess
         "bullets": style_guide.get("tone", {}).get("bullets", True),
         "avoid": ", ".join(style_guide.get("tone", {}).get("avoid", [])),
         "must_include": ", ".join(style_guide.get("tone", {}).get("must_include", [])),
-        "fallback": style_guide.get("fallback", {}).get("no_data", "У меня нет точной информации.")
+        "fallback": style_guide.get("fallback", {}).get("no_data", "У меня нет точной информации."),
+        "faq": style_guide.get("faq", {}),
+        "orders": style_guide.get("orders", {})
     }
     
     # Определяем версию промпта
@@ -102,7 +106,7 @@ def create_system_prompt_template(prompt_version: str = "current") -> SystemMess
     return SystemMessagePromptTemplate.from_template(prompt_config["system"], partial_variables=prompt_variables)
 
 
-def create_user_prompt_template(prompt_version: str = "current") -> HumanMessagePromptTemplate:
+def create_user_prompt_template(prompt_version: str = "current") -> ChatPromptTemplate:
     """
     Создает шаблон пользовательского промпта на основе данных из prompts.yaml.
     
@@ -111,7 +115,7 @@ def create_user_prompt_template(prompt_version: str = "current") -> HumanMessage
                              Если "current", используется версия из поля current.
     
     Returns:
-        HumanMessagePromptTemplate: Объект HumanMessagePromptTemplate из LangChain
+        ChatBotTemplate: Объект ChatBotTemplate из LangChain
     """
     # Загружаем данные промптов
     prompts_data = load_prompts()
@@ -136,7 +140,7 @@ def create_user_prompt_template(prompt_version: str = "current") -> HumanMessage
         raise ValueError(f"Пользовательский промпт не найден для версии '{version}'")
     
     # Создаем и возвращаем шаблон пользовательского сообщения
-    return HumanMessagePromptTemplate.from_template(prompt_config["user"], partial_variables=format_fields)
+    return HumanMessagePromptTemplate.from_template(prompt_config["user"], partial_variables={"format_fields":format_fields})
 
 
 def create_chat_prompt_template(prompt_version: str = "current") -> ChatPromptTemplate:
@@ -157,6 +161,7 @@ def create_chat_prompt_template(prompt_version: str = "current") -> ChatPromptTe
     try:
         system_template = create_system_prompt_template(prompt_version)
         messages.append(system_template)
+        messages.append(MessagesPlaceholder(variable_name="history", optional=True))
     except ValueError:
         # Системный промпт не найден, пропускаем
         pass
@@ -200,21 +205,21 @@ class ChatBot:
         self.faq_data = self._load_faq_data()
         self.orders_data = self._load_orders_data()
         
-        # Создаем модель и цепочку с памятью
+        # Создаем модель и память
         self.llm = ChatOpenAI(
             model_name=self.model_name, 
             temperature=self.temperature, 
             request_timeout=self.request_timeout
         )
-        self.memory = ConversationBufferMemory(output_key="response")
-        self.conversation = ConversationChain(
-            llm=self.llm, 
-            memory=self.memory, 
-            return_final_only=False
+        self.llm_with_so = self.llm.with_structured_output(BotResponse, include_raw=True)
+        self.prompt = create_chat_prompt_template()
+        self.memory = ConversationBufferMemory(
+            memory_key="history",
+            return_messages=True
         )
         
         # Добавляем системное сообщение
-        self._setup_system_message()
+        # self._setup_system_message()
         
         logging.info(f"=== New session {self.session_id} ===")
     
@@ -238,9 +243,9 @@ class ChatBot:
         """Настраивает системное сообщение для чат-бота"""
         # Создаем предзаполненный системный промпт
         system_message = create_system_prompt_template()
-        
-       
-        self.conversation.memory.chat_memory.add_message(system_message.format())
+        system_message = system_message.format(faq=self.faq_data, orders=self.orders_data)
+        print(system_message)
+        self.memory.chat_memory.add_message(system_message)
     
     def get_order_status(self, order_id: str) -> str:
         """Получает статус заказа по ID из orders.json"""
@@ -254,38 +259,48 @@ class ChatBot:
         
         with open(logs_dir / f"session_{self.session_id}.jsonl", "a", encoding='utf-8') as f:
             json.dump({
-                "dialog": f"User: {user_input}\nBot: {bot_reply}", 
+                "dialog": f"User: {user_input}\nBot: {json.dumps(bot_reply.model_dump(), ensure_ascii=False, indent=4)}", 
                 "usage": total_tokens
             }, f, ensure_ascii=False)
             f.write("\n")
     
-    def chat(self, user_input: str) -> str:
+    def chat(self, user_input: str) -> BotResponse:
         """
-        Обрабатывает пользовательский ввод и возвращает ответ бота
-        Использует пайплайн: user_prompt | llm
+        Обрабатывает пользовательский ввод и возвращает структурированный ответ бота
+        Использует пайплайн: prompt | llm
         
         Args:
             user_input (str): Ввод пользователя
             
         Returns:
-            str: Ответ бота
+            BotResponse: Структурированный ответ бота
         """
         # Проверяем команду /order
         if user_input.startswith("/order "):
             order_id = user_input.replace("/order ", "").strip()
-            return self.get_order_status(order_id)
+            user_input += f"\nИНФОРМАЦИЯ О ЗАКАЗЕ: {self.get_order_status(order_id)}"
         
-        # Создаем пайплайн: user_prompt | llm
-        # 1. Создаем шаблон пользовательского промпта
-        user_prompt_template = create_user_prompt_template()
-      
-        chain = user_prompt_template | self.llm
-        # 2. Вызываем LLM с отформатированным промптом
-        response = self.llm.invoke({"user_input": user_input})
+        # Получаем историю диалога из памяти
+        history = self.memory.chat_memory.messages
         
-        # 3. Возвращаем содержимое ответа
-        return response.content
-    
+        # Создаем пайплайн: prompt | llm
+        # 1. Форматируем промпт с историей и пользовательским вводом
+        formatted_prompt = self.prompt.format_messages(
+            history=history,
+            input=user_input
+        )
+        
+        # 2. Вызываем LLM
+        response = self.llm_with_so.invoke(formatted_prompt)
+        total_tokens = response["raw"].response_metadata["token_usage"]["total_tokens"]
+        bot_replay = response["parsed"]
+
+        
+        # 3. Сохраняем диалог в память
+        self.memory.chat_memory.add_user_message(user_input)
+        self.memory.chat_memory.add_ai_message(bot_replay.answer)
+                
+        return bot_replay, total_tokens
 
 
 BASE = Path(__file__).parent.parent
